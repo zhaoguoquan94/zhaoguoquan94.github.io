@@ -1,0 +1,260 @@
+---
+author: zhaoguoquan
+comments: true
+date: 2014-12-06 13:02:41+00:00
+layout: post
+slug: linux%e4%b8%8brx%e6%9d%83%e9%99%90
+title: Linux下rx权限
+wordpress_id: 50
+categories:
+- Amazon
+- Linux
+- 云
+- 文件系统
+---
+
+# Linux下rx权限
+
+
+
+
+## 问题
+
+
+笔者在阿里云和Amazon上各有一台服务器，为了学zhuang习bi用wordpress搭建了自己的博客，还有实验室跑的云服务器。半年前曾经遇到过一个问题，nginx必须以root用户的身份跑，否则会报各种403的错误，跑到error.log中看发现时open文件失败了。但是即使把那个目录及子文件chmod为777都没有用……当时没把这个当个事，root跑完事。这几天给实验室搭站，又遇到了这个问题。于是决定把其中的问题找出来。
+
+
+## Linux的read，execute权限
+
+
+如果没有特意学习过Linux，那么这个read权限很具有迷惑性。尤其是在文件与文件夹这两个不同的东西上表现的尤为明显。
+
+如果不清楚Linux的文件系统、inode等概念，理解起来会比较困难。这里先解释一下什么是inode。
+
+inode=index node。简单来说，inode是一种数据结构，储存了文件的相关信息，代表了一个文件系统对象（可以是文件，文件夹等），这种数据结构包括这些metadata（描述数据的数据）：
+
+
+
+	
+  * inode编号 可以理解为id
+
+	
+  * 文件大小
+
+	
+  * 所使用磁盘块数
+
+	
+  * 修改访问创建时间
+
+	
+  * 权限信息，group-id, user-id等
+
+	
+  * 指向实际储存文件的文件块的指针
+
+	
+  * ……
+
+
+inode的结构看[这里](http://en.wikipedia.org/wiki/Inode_pointer_structure).
+
+可以使用stat [filename]的方法查看inode节点的一些内容。
+
+
+#### 什么是文件夹
+
+
+仔细思考一下，一个文件夹不就是一个容器**文件**，里面放着一些文件和子文件夹吗。是的。Unix文件夹就是一个列表，每一项包含一个文件名和一个inode number。
+
+更清楚的说，一个文件夹就是一个【文件内容是一张表】的文件，这张表就像这样
+<table >
+
+<tr >
+filename
+inode number
+</tr>
+
+<tbody >
+<tr >
+
+<td >file1
+</td>
+
+<td >1234
+</td>
+</tr>
+<tr >
+
+<td >file2
+</td>
+
+<td >1235
+</td>
+</tr>
+<tr >
+
+<td >dir1
+</td>
+
+<td >1245
+</td>
+</tr>
+</tbody>
+</table>
+当然，文件夹也有相应的inode指到他。
+
+
+#### 如何定位一个文件
+
+
+假设我们在/root下，希望读取/root/lrm/het.txt文件
+1. 查root表，根据文件名找到lrm的inode number
+2. 根据inode中保存的磁盘块信息读取文件内容。得到了lrm的文件内容，里面又是一张表
+3. 根据lrm表，得到het.txt对应的inode number
+4. 根据inode number找到文件内容。
+
+此时，read权限呼之欲出，即读取文件内容。
+**如果是文件夹，则权限只有他目录下的所有文件、子文件夹的文件名。并不能真正读取里面的文件。**
+<table >
+
+<tr >
+filename
+inode
+</tr>
+
+<tbody >
+<tr >
+
+<td >file1
+</td>
+
+<td >Not avaliable
+</td>
+</tr>
+<tr >
+
+<td >file2
+</td>
+
+<td >Not avaliable
+</td>
+</tr>
+<tr >
+
+<td >dir1
+</td>
+
+<td >Not avaliable
+</td>
+</tr>
+</tbody>
+</table>
+execute权限即执行文件的权限。
+**如果是文件夹，则权限就是得到里面的文件、文件夹的入口：inode number**
+<table >
+
+<tr >
+filename
+inode number
+</tr>
+
+<tbody >
+<tr >
+
+<td >？
+</td>
+
+<td >1234
+</td>
+</tr>
+<tr >
+
+<td >？
+</td>
+
+<td >1235
+</td>
+</tr>
+<tr >
+
+<td >？
+</td>
+
+<td >1245
+</td>
+</tr>
+</tbody>
+</table>
+（考虑只有execute权限而没有read权限，会发生什么问题？）
+为了解释上面的内容，我们执行下面的命令
+
+    
+    <code>➜  ~  mkdir lrm
+    ➜  ~  cd lrm
+    ➜  lrm  vim het.txt
+    ➜  lrm  chmod 777 het.txt
+    ➜  lrm  cd ..
+    ➜  ~  chmod 444 lrm
+    ➜  ~  ls lrm
+    ls: het.txt: Permission denied
+    ➜  ~
+    </code>
+
+
+我们看到，即使文件的权限是777，只要所在文件夹没有execute权限，也是读取不了文件的。
+
+
+#### 只有execute权限没有read权限会怎样
+
+
+
+    
+    <code>➜  ~  chmod 111 lrm
+    ➜  ~  less lrm/het.txt
+    ➜  ~  ls lrm
+    ls: lrm: Permission denied
+    </code>
+
+
+竟然打开了这个文件！很有趣吧，这时文件名变成了密码，除非你知道文件名，不然是无法打开的。这也说明execute和read权限的相互关系。
+
+
+## 定位问题
+
+
+root目录没有execute权限。导致nginx以nginx：nginx用户运行的时候，到了/root就不能得到其中的子文件inode了。
+
+
+## 结论
+
+
+
+
+
+	
+  * 要想通过一个目录，必须具有execute权限
+
+	
+  * 要想读取某个文件，文件路径上的所有父文件夹都必须是可到达的。
+
+	
+  * 我的GRE快跪了。
+
+
+
+
+## reference
+
+
+[一天一点学习Linux之Inode详解](http://www.cnblogs.com/hnrainll/archive/2011/06/18/2084210.html)
+
+[Nginx 403 forbidden for all files](http://stackoverflow.com/questions/6795350/nginx-403-forbidden-for-all-files)
+
+[Do the parent directory's permissions matter when accessing a subdirectory?](http://unix.stackexchange.com/questions/13858/do-the-parent-directorys-permissions-matter-when-accessing-a-subdirectory)
+
+[GNU/Linux Command-Line Tools Summary Chapter 14. Security](http://www.tldp.org/LDP/GNU-Linux-Tools-Summary/html/x9543.htm)
+[freebsd Chapter 4. UNIX Basics](https://www.freebsd.org/doc/handbook/permissions.html)
+[Why do directories need the executable (X) permission to be opened?](http://unix.stackexchange.com/questions/21251/why-do-directories-need-the-executable-x-permission-to-be-opened)
+
+[inode](http://en.wikipedia.org/wiki/Inode)

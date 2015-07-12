@@ -1,0 +1,499 @@
+---
+author: zhaoguoquan
+comments: true
+date: 2015-07-02 14:48:19+00:00
+layout: post
+slug: '%e5%86%85%e6%a0%b8%e5%b4%a9%e6%ba%83%e9%80%9a%e8%bf%87lldb%e6%b7%b1%e5%85%a5%e7%90%86%e8%a7%a3c%e8%af%ad%e8%a8%80%e7%9a%84%e5%87%bd%e6%95%b0%e8%b0%83%e7%94%a8%e7%9a%84%e6%b1%87%e7%bc%96%e6%9c%ba'
+title: 内核崩溃!通过LLDB深入理解C语言的函数调用的汇编机理
+wordpress_id: 87
+categories:
+- C
+- 汇编语言
+tags:
+- C
+- xcode
+- 汇编
+---
+
+# 
+
+
+
+
+## 背景
+
+
+输入法内核是在32位时代编写，有些资料说明了从32位转64位需要注意的地方，但是我们发现那些措施并不能很好的解决问题。经常出现那种在32位机子（iPhone5及以下）运行正常而在5S以上崩溃的问题。上周，内核就出现了一次崩溃，通过一晚上的排查发现并解决了问题。但是单步调试的过程中出现了非常奇怪的现象：函数调用栈突然消失了一大半，继续单步则会出现EXC_BAD_ACCESS(code=1)的错误。
+
+正常的backtrace
+
+![屏幕快照 2015-07-01 下午10.00.29]({{site.url}}/uploads/2015/07/屏幕快照-2015-07-01-下午10.00.29.png)
+
+异常的backtrace
+
+[![屏幕快照 2015-07-01 下午10.01.11]({{site.url}}/uploads/2015/07/屏幕快照-2015-07-01-下午10.01.11.png)]({{site.url}}/uploads/2015/07/屏幕快照-2015-07-01-下午10.01.11.png)
+
+
+
+
+## 尝试解决
+
+
+我发现在问题C语言层面根本无法解释。调用结构如下：
+
+`num = UIGetPrefixNum();`
+
+    
+    <code>UIGetPrefixNum()
+        GetPrefixNum()
+            QueryNextPrefix()
+    </code>
+
+
+通过调试，我发现QueryNextPrefix，GetPrefixNum正常返回，但一旦继续，就会出现EXC_BAD_ACCESS。num并没有被赋值。
+
+**这么奇怪的问题已经完全不是C语言层面能够解决的问题了**，当然一定是C语言引起的。**想要解决，就必须跳至汇编层面分析。
+
+
+## 反汇编
+
+
+插入断点后在lldb中输入disassemble即可获得当前函数帧的反汇编代码。
+
+[![屏幕快照 2015-07-02 下午10.43.19]({{site.url}}/uploads/2015/07/屏幕快照-2015-07-02-下午10.43.19.png)]({{site.url}}/uploads/2015/07/屏幕快照-2015-07-02-下午10.43.19.png)
+
+呵呵，完全不是我们能看懂的啊，难道汇编白学了？
+
+其实，Xcode在编译真机上的程序时使用的是ARM指令集，我们平时并没有接触。但是Xcode虚拟机则是能够运行在电脑上的汇编。鉴于此问题在模拟器上也可以出现，我就在虚拟机上进行了下面的调试。 [![屏幕快照 2015-07-01 下午10.13.29]({{site.url}}/uploads/2015/07/屏幕快照-2015-07-01-下午10.13.29.png)]({{site.url}}/uploads/2015/07/屏幕快照-2015-07-01-下午10.13.29.png)
+
+
+## 解决问题
+
+
+通过单步调试，我最终将问题定位在了一个循环中.
+
+    
+    <code>int32_t QueryNextPrefix()
+    {
+        uint8_t i = 0, j = 0;
+        char tmpSylla[5];
+        /*...some work...*/
+        for (i = xxx;(XX)&&(j<6); i++, j++)
+        {
+            tmpSylla[j] = nkgCandidate.inputSylla[i];
+        }
+        tmpSylla[j] = '\0'; 
+        return SUCCESS;
+    }
+    </code>
+
+
+tmpSylla里面的5是一个错误的宏，导致了指针越界。修改宏后问题消失。但是，函数调用栈的问题依旧不清楚是什么原理。
+在这个循环中，程序对越界的tmpSylly[5]的赋值了char类型的‘6’,也就是int的54.然后对tmpSylla[j]赋值了’\0’
+
+**由于循环结束条件是j<6,我天真的以为循环结束的时候j为7，tmpSylla[7]被赋值了’\0’,后面才发现，我低估了野指针的威力**
+
+
+### 背景知识
+
+
+
+
+#### 函数帧与查看调用栈的命令backtrace
+
+
+[原文链接](http://www.linuxjournal.com/article/6391)
+
+简单回顾一下函数调用与传递参数的过程。为了调用一个函数，参数按照反序压入栈中。（即从最后一个参数开始压栈）。结束之后，调用者将返回地址压栈。以便调用的函数返回后能继续执行当前函数的后序操作。最后，被调函数在栈中创建他自己的函数帧，分配一定空间用于储存local的变量。
+
+当出现嵌套函数调用时，之前的过程又会发生，新的函数帧随着函数调用被创建，随着函数返回被弹出。因此，通过分析全部的函数帧，在任意时刻都可以对整个函数的调用顺序进行回溯。
+<table >
+
+<tr >
+**函数栈开始**
+解释
+</tr>
+
+<tbody >
+<tr >
+
+<td >.......
+</td>
+
+<td >其他函数帧。从下面的地址开始，为此函数帧的起始位置
+</td>
+</tr>
+<tr >
+
+<td >----------
+</td>
+
+<td >函数帧分割线，内存中并没有占用任何位置
+</td>
+</tr>
+<tr >
+
+<td >此函数调用者的ebp
+</td>
+
+<td >是一个内存地址，为上一个函数帧的起始位置。ebp为即base pointer，指向函数帧的起始位置。类似的esp为stack pointer，指向栈顶（但是此位置并未使用，而是将要使用）
+</td>
+</tr>
+<tr >
+
+<td >local variable
+</td>
+
+<td >此函数的局部变量
+</td>
+</tr>
+<tr >
+
+<td >args
+</td>
+
+<td >此函数为了调用下面的函数，需要传参，参数按照逆序压入栈中
+</td>
+</tr>
+<tr >
+
+<td >返回地址
+</td>
+
+<td >此函数调用下面的函数结束后返回的地址，同时也是此函数帧的结束位置
+</td>
+</tr>
+<tr >
+
+<td >----------
+</td>
+
+<td >函数帧分割线，内存中并没有占用任何位置
+</td>
+</tr>
+<tr >
+
+<td >调用者的ebp
+</td>
+
+<td >内容是一个内存地址，为上一个函数帧的起始位置。被调用函数帧的开始位置
+</td>
+</tr>
+<tr >
+
+<td >......
+</td>
+
+<td >类似上面
+</td>
+</tr>
+</tbody>
+</table>
+
+
+### 定义问题
+
+
+为什么会出现EXC_BAD_ACCESS错误？为什么函数调用栈中途消失？
+
+
+### 函数调用栈
+
+
+使用bt命令（backtrace）可以打印整个函数调用栈。
+
+    
+    <code>* thread #1: tid = 0xffc33, 0x00000001078458cc com.wilab.WIInputMethod.WIKeyboard`QueryNextPrefix + 28 at ime_interface.c:596, queue = 'com.apple.main-thread', stop reason = breakpoint 2.1
+        frame #0: 0x00000001078458cc com.wilab.WIInputMethod.WIKeyboard`QueryNextPrefix + 28 at ime_interface.c:596
+      * frame #1: 0x000000010784642d com.wilab.WIInputMethod.WIKeyboard`GetPrefixNum(isMultiPrefixSelected='\x01') + 29 at ime_interface.c:800
+        frame #2: 0x00000001078464bc com.wilab.WIInputMethod.WIKeyboard`UIGetPrefixNum + 44 at ime_interface.c:816
+    </code>
+
+
+我们知道，C语言中，函数中的非static变量是储存在栈中的。这些值随着函数返回而销毁。然而，并没有人告诉我们这个栈到底是什么样子的。《深入理解计算机系统》，也就是我们熟悉的CSAPP给出了详细的解释。
+
+比如在一个例子中，A()调用了B()。A中定义了int a;B中定义了int b;那么，在A过程中，A的帧指针%ebp指向的位置储存了A的调用者的caller_of_a()的%ebp。A的帧指针的低位（栈是由高地指向低地址生长的）储存了函数中定义的变量a。B也类似。
+
+每次函数调用时，call指令会将被调用函数返回后应该执行的代码的地址入栈。返回的时候，ret指令负责弹栈，把这个地址放在指令寄存器IR中，下一步就去执行。
+
+在每次被调函数的开始，会有这么几句：
+
+    
+    <code>0x1078458b0 <+0>:   pushq  %rbp         
+    # 将调用者A的base pointer%ebp入栈记录下来，这样当此函数返回时我就知道ebp应该恢复成这个值了
+    0x1078458b1 <+1>:   movq   %rsp, %rbp   
+    # %rsp本来是指向栈顶的空位置的，但是有函数被调用，应该创建新函数帧frame，所以新的函数帧的起始点就是%rsp现在的位置
+    0x1078458b4 <+4>:   subq   $0x20, %rsp  
+    # 将栈顶下移32个大小。相当于为函数分配了32字节的储存空间。这是为了对齐内存等。故会有一些空位没有真正储存数据。
+    </code>
+
+
+lldb中，p指令可以打印出某变量的信息。expression（expr）可以执行运算返回结果。
+
+因此：
+
+
+
+	
+  * 当前%rbp的的值是栈顶的地址
+
+	
+  * `p (long*)$rbp`可以打印出当前函数帧的地址（16进制）
+
+	
+  * `p *((long*)$rbp)`是此函数的调用者的栈顶的地址
+
+	
+  * `p (long*)*((long*)$rbp)`可以打印出此函数调用者的栈顶的地址（16进制）
+
+
+经试验：结果如下:在QueryNextPrefix中，
+
+    
+    <code>//QueryNextPrefix的栈底地址
+    (lldb) p $rbp
+    (unsigned long) $16 = 140734673736608
+    
+    (lldb) p (long*)$rbp
+    (long *) $17 = 0x00007fff583c53a0
+    
+    
+    //QueryNextPrefix的栈顶地址，相差了32字节
+    (lldb) p $rsp
+    (unsigned long) $20 = 140734673736576
+    (lldb) p (long*)$rsp
+    (long *) $21 = 0x00007fff583c5380
+    
+    //QueryNextPrefix的调用者GetPrefixNum的栈底地址
+    (lldb) p *((long*)$rbp)
+    (long) $18 = 140734673736640
+    (lldb) p (long*)*((long*)$rbp)
+    (long *) $19 = 0x00007fff583c53c0
+    
+    //QueryNextPrefix的调用者GetPrefixNum的栈底地址的储存的内容是指向的他的调用者UIGetPrefixNum的地址
+    (lldb) p *(long*)*((long*)$rbp)
+    (long) $23 = 140734673736672
+    </code>
+
+
+在汇编代码中：
+
+    
+    <code>0x1078458c4 <+20>:  movb   $0x0, -0x5(%rbp)    i的位置在%rbp-5的位置
+    0x1078458c8 <+24>:  movb   $0x0, -0x6(%rbp)    j的位置在%rbp-6的位置
+    </code>
+
+
+将i，j赋值为0。
+
+**模拟器使用的是“小端法”，低地址存放低位**
+
+下面我们看看tmpSylla的位置在哪里。
+
+    
+    <code>(lldb) p (long*)($rbp-11)
+    (long *) $26 = 0x00007fff583c5395
+    (lldb) p &tmpSylla[0]
+    (char *) $27 = 0x00007fff583c5395 "6666"
+    </code>
+
+
+我们发现tmpSylla的第一个元素在rbp-11的位置，到rbp-7是tmpSylla[4]。所以，**对tmpSylla[5]的赋值操作就是对$rbp-11+5即%rbp-6的操作，而这正是j的地址**
+
+也就是说：
+
+    
+    <code>int32_t QueryNextPrefix()
+    {
+        uint8_t i = 0, j = 0;
+        char tmpSylla[5];
+        /*...some work...*/
+        for (i = xxx;(XX)&&(j<6); i++, j++)
+        {
+            tmpSylla[j] = nkgCandidate.inputSylla[i];
+        }
+        tmpSylla[j] = '\0'; 
+        return SUCCESS;
+    }
+    </code>
+
+
+`tmpSylla[j] = '\0';`这句中的j并不是7，而是最后的循环内被赋值的一个计算结果。对于本次输入，得到了‘6’,也就是54.函数将$rbp-11+54即$rbp+44=140734673736652的位置置为了0.
+
+由于这个地址在高位，因此一定是更改了这个函数的调用者，或者调用者的调用者的部分变量。
+
+同时，我们注意到：
+
+    
+    <code>(lldb) p (void*)($rbp)
+    (void *) $85 = 0x00007fff5479a3e0
+    (lldb) p (void*)($rsp)
+    (void *) $86 = 0x00007fff5479a3d0
+    
+    (lldb) p (void*)($rbp)
+    (void *) $87 = 0x00007fff5479a3c0
+    (lldb) p (void*)($rsp)
+    (void *) $88 = 0x00007fff5479a3b0
+    
+    
+    (lldb) p (void*)($rbp)
+    (void *) $97 = 0x00007fff5479a3a0
+    (lldb) p (void*)($rsp)
+    (void *) $98 = 0x00007fff5479a380
+    </code>
+
+
+我们发现，在分配内存时，函数帧之间存在着空隙。
+
+
+## 错误原因
+
+
+有了以上的知识，我们就可以定位问题了。
+
+GetPrefixNum的栈底：140734673736640
+
+UIGetPrefixNum栈底：140734673736672
+
+被更改的位置：140734673736652位于UIGetPrefixNum的低位的20个字节，GetPrefixNum高位12字节的位置。
+
+因此
+
+
+
+	
+  * 140734673736640~140734673736647为GetPrefixNum记录的UIGetPrefixNum的ebp，
+
+	
+  * 140734673736648~140734673736657为UIGetPrefixNum的返回地址。而因数组越界更改的地方就在这里，导致UIGetPrefixNum返回时找不到正确的返回地址。造成错误。
+
+
+
+
+### 图解Stack
+
+
+<table >
+
+<tr >
+地址
+**函数栈开始（高地址）**
+解释
+</tr>
+
+<tbody >
+<tr >
+
+<td >------
+</td>
+
+<td >.......
+</td>
+
+<td >其他函数帧。从下面的地址开始，为此函数帧的起始位置
+</td>
+</tr>
+<tr >
+
+<td >------
+</td>
+
+<td >----------
+</td>
+
+<td >函数帧分割线，内存中并没有占用任何位置
+</td>
+</tr>
+<tr >
+
+<td >140734673736672
+</td>
+
+<td >UIGetPrefixNum调用者的ebp
+</td>
+
+<td >是一个内存地址140734673736672
+</td>
+</tr>
+<tr >
+
+<td >
+</td>
+
+<td >local variable
+</td>
+
+<td >UIGetPrefixNum的局部变量
+</td>
+</tr>
+<tr >
+
+<td >
+</td>
+
+<td >args
+</td>
+
+<td >UIGetPrefixNum为了调用下面的函数，需要传参，参数按照逆序压入栈中
+</td>
+</tr>
+<tr >
+
+<td >140734673736648~
+
+140734673736657
+</td>
+
+<td >UIGetPrefixNum返回地址
+</td>
+
+<td >UIGetPrefixNum调用GetPrefixNum结束后返回的地址，同时也是UIGetPrefixNum帧的结束位置
+</td>
+</tr>
+<tr >
+
+<td >-
+</td>
+
+<td >----------
+</td>
+
+<td >函数帧分割线，内存中并没有占用任何位置
+</td>
+</tr>
+<tr >
+
+<td >140734673736640~
+
+140734673736647
+</td>
+
+<td >调用者的ebp
+</td>
+
+<td >是一个内存地址，内容为上一个函数帧的起始位置。被调用函数帧的开始位置
+</td>
+</tr>
+<tr >
+
+<td >
+</td>
+
+<td >....（低地址）..
+</td>
+
+<td >类似上面
+</td>
+</tr>
+</tbody>
+</table>
+
+
+## 结语
+
+
+C语言赋予程序员极高的权利，让程序员能操纵很底层的东西。我们要珍视这种特权，乱用会带来灾难性的后果。
+
+PS：欢迎大家使用WI输入法~
+
+http://wi.hit.edu.cn

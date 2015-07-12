@@ -1,0 +1,17 @@
+# Site settings
+title: 赵国铨@HIT
+header-img: img/banner.jpeg
+email: your-email@yourdomain.com
+description: "Write your site description here. It will be used as your sites meta description as well!"
+baseurl: "" # the subpath of your site, e.g. /blog/
+url: "" # the base hostname & protocol for your site
+twitter_username: grayson_zhao
+github_username:  zhaoguoquan94
+facebook_username:  赵国铨
+
+# Build settings
+markdown: kramdown
+highlighter: pygments
+permalink: pretty
+paginate: 10
+exclude: ["less","node_modules","Gruntfile.js","package.json","README.md"]
