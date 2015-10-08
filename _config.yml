@@ -8,6 +8,7 @@ url: "" # the base hostname & protocol for your site
 twitter_username: grayson_zhao
 github_username:  zhaoguoquan94
 facebook_username:  赵国铨
+comments: true
 
 # Build settings
 markdown: kramdown
