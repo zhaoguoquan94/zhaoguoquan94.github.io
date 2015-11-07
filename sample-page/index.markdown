@@ -8,13 +8,14 @@ title: 关于我
 wordpress_id: 2
 ---
 
-就读于哈尔滨工业大学的软件狗
+就读于哈尔滨工业大学学院学生。
+目前在澳大利亚国立大学交换。
 
-喜欢Coding，喜欢设计
+喜欢Coding，喜欢设计。目前在申请美帝master。
 
-[![赵国铨](http://blog.zhaoguoquan.com/wp-content/uploads/2014/11/large_2ShW_26740000d2551190.jpg)](http://blog.zhaoguoquan.com/wp-content/uploads/2014/11/large_2ShW_26740000d2551190.jpg)
+[![赵国铨](/img/zgq.jpg)](/img/zgq.jpg)
 
-联系我：
+联系我：在python中键入：
 
->>> import base64
->>> email_address=base64.b64decode(b'emhhby1ndW8tcXVhbkAxMjYuY29t')
+    import base64
+    print(base64.b64decode(b'emhhby1ndW8tcXVhbkAxMjYuY29t'))
