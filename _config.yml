@@ -1,5 +1,5 @@
 # Site settings
-title: 赵国铨@HIT
+title: 赵国铨CMU
 header-img: img/cover_2048.jpg
 email: your-email@yourdomain.com
 description: "Guoquan Zhao''s personal blog. Focus on Computer Science."
@@ -16,3 +16,5 @@ highlighter: pygments
 permalink: pretty
 paginate: 10
 exclude: ["less","node_modules","Gruntfile.js","package.json","README.md"]
+plugins:
+  - jekyll-paginate
